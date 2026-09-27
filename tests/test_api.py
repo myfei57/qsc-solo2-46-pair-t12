@@ -97,6 +97,34 @@ class DispatchFlowTests(unittest.TestCase):
         status, payload = dispatch(self.console, "POST", "/api/hoist/stop")
         self.assertFalse(payload["data"]["moving"])
 
+    def test_hoist_calibrate_flow(self) -> None:
+        status, payload = dispatch(
+            self.console, "POST", "/api/hoist/calibrate", {"measured_height": 10}
+        )
+        self.assertEqual(status, 409)
+        dispatch(self.console, "POST", "/api/hoist/payout", {"length": 40})
+        status, payload = dispatch(
+            self.console, "POST", "/api/hoist/calibrate", {"measured_height": 0}
+        )
+        self.assertEqual(status, 409)
+        status, payload = dispatch(
+            self.console, "POST", "/api/hoist/calibrate", {"measured_height": 41.2}
+        )
+        self.assertEqual(status, 200)
+        data = payload["data"]
+        self.assertAlmostEqual(data["correction"], 1.03)
+        self.assertAlmostEqual(data["cable_height"], 41.2)
+        self.assertEqual(data["calibrations"], 1)
+        self.assertEqual(data["last_calibration"]["measured_height"], 41.2)
+        self.assertAlmostEqual(data["encoder_height"], data["cable_height"])
+        request = Request("GET", "/api/audit", {"action": ["drum-calibration"]}, {})
+        status, payload = self.console.dispatch(request)
+        self.assertEqual(len(payload["data"]), 1)
+        self.assertIn("correction=1.0300", payload["data"][0]["detail"])
+        request = Request("POST", "/api/hoist/calibrate", {}, {}, body_valid=False)
+        status, _ = self.console.dispatch(request)
+        self.assertEqual(status, 400)
+
     def test_command_stop_priority(self) -> None:
         dispatch(self.console, "POST", "/api/slew/start")
         dispatch(self.console, "POST", "/api/crane/command", {"source": "cab", "action": "stop"})
@@ -230,6 +258,25 @@ class HttpServerTests(unittest.TestCase):
 
 
 class BootSnapshotTests(unittest.TestCase):
+    def test_drum_calibration_survives_a_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            first = build_app(directory, web_root=str(WEB_ROOT))
+            dispatch(first.console, "POST", "/api/hoist/payout", {"length": 40})
+            status, payload = dispatch(
+                first.console, "POST", "/api/hoist/calibrate", {"measured_height": 41.2}
+            )
+            self.assertEqual(status, 200)
+            first.shutdown()
+
+            second = build_app(directory, web_root=str(WEB_ROOT))
+            drum = second.console.drum
+            self.assertAlmostEqual(drum.wound_total(), 40.0)
+            self.assertAlmostEqual(drum.correction_now(), 1.03)
+            self.assertEqual(drum.calibration_count(), 1)
+            self.assertAlmostEqual(drum.height_from_cable(drum.wound_total()), 41.2)
+            self.assertIsNotNone(drum.last_calibration_now())
+            second.shutdown()
+
     def test_state_survives_a_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             first = build_app(directory, web_root=str(WEB_ROOT))

@@ -85,13 +85,21 @@ def trolley_view(console: "Console") -> dict[str, object]:
 def hoist_view(console: "Console") -> dict[str, object]:
     hoist = console.hoist
     drum = console.drum
+    last_calibration = drum.last_calibration_now()
     return {
         "id": hoist.id,
         "hook_lowered": hoist.hook_lowered(),
         "brake_engaged": hoist.brake_on(),
         "moving": hoist.is_moving(),
         "drum_layers": drum.layer_count(),
+        "cable_out": drum.wound_total(),
         "cable_height": drum.height_from_cable(drum.wound_total()),
+        "encoder_height": drum.height_from_revolutions(drum.revolutions_now()),
+        "drum_revolutions": drum.revolutions_now(),
+        "falls": drum.falls,
+        "correction": drum.correction_now(),
+        "calibrations": drum.calibration_count(),
+        "last_calibration": last_calibration.to_dict() if last_calibration else None,
         "feedback_speed": console.feedback.speed_now(),
     }
 

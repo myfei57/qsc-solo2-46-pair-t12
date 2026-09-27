@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import cluster as fleet
 from . import config as site_config
+from . import hoist as hoist_module
 from . import slew as slew_module
 from . import zone as zone_module
 from .audit import Audit, AuditEntry
@@ -99,6 +100,7 @@ def build_app(data_dir: str = "data", web_root: str = "web") -> App:
         config=config,
         web_root=web_root,
     )
+    hoist_module.restore_drum(console.drum, hoist.id, store)
     audit.record("system", "boot", "control service started")
     return App(console=console, store=store, audit=audit, snapshot_path=snapshot_path)
 

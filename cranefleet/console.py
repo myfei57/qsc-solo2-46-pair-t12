@@ -26,6 +26,7 @@ from .cluster import Cluster
 from .config import ConfigError, SiteConfig
 from .crane import Crane
 from .errors import (
+    CalibrationError,
     CraneFleetError,
     FeedbackNotConfirmed,
     HoistBusy,
@@ -137,6 +138,7 @@ class Console:
             ("POST", "/api/trolley/resume"): self.handle_trolley_resume,
             ("GET", "/api/hoist/state"): self.handle_hoist_state,
             ("POST", "/api/hoist/payout"): self.handle_hoist_payout,
+            ("POST", "/api/hoist/calibrate"): self.handle_hoist_calibrate,
             ("POST", "/api/hoist/feedback"): self.handle_hoist_feedback,
             ("POST", "/api/hoist/release"): self.handle_hoist_release,
             ("POST", "/api/hoist/stop"): self.handle_hoist_stop,
@@ -381,6 +383,28 @@ class Console:
         if not request.body_valid:
             return 400, fail("bad request")
         self.drum.pay_out(_number(request.body.get("length")))
+        return 200, ok(views.hoist_view(self))
+
+    def handle_hoist_calibrate(self, request: Request) -> tuple[int, dict[str, Any]]:
+        if not request.body_valid:
+            return 400, fail("bad request")
+        try:
+            record = hoist_module.calibrate_drum(
+                self.drum, _number(request.body.get("measured_height"))
+            )
+        except CalibrationError as exc:
+            return 409, fail(str(exc))
+        try:
+            hoist_module.persist_drum(self.drum, self.hoist.id, self.store)
+        except StoreError as exc:
+            return 500, fail(str(exc))
+        self.audit.record(
+            self.hoist.id,
+            "drum-calibration",
+            f"measured={record.measured_height:.3f}m "
+            f"estimate={record.estimated_height:.3f}m "
+            f"correction={record.correction:.4f}",
+        )
         return 200, ok(views.hoist_view(self))
 
     def handle_hoist_feedback(self, request: Request) -> tuple[int, dict[str, Any]]:

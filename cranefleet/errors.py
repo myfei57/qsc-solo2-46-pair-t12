@@ -71,6 +71,10 @@ class FeedbackNotConfirmed(HoistError):
     """Raised when the brake is released before the speed feedback arrives."""
 
 
+class CalibrationError(HoistError):
+    """Raised when a drum calibration measurement cannot be accepted."""
+
+
 class WindError(CraneFleetError):
     """Base class for wind failures."""
 

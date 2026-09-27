@@ -142,6 +142,23 @@ $("hoist-stop-btn").addEventListener("click", async () => {
   refresh();
 });
 
+$("calibrate-btn").addEventListener("click", async () => {
+  const input = window.prompt("实测吊钩高度（米）：");
+  if (input === null) {
+    return;
+  }
+  const measured = Number(input);
+  if (!Number.isFinite(measured) || measured <= 0) {
+    window.alert("请输入大于 0 的实测高度");
+    return;
+  }
+  const result = await post("/api/hoist/calibrate", { measured_height: measured });
+  if (!result.ok) {
+    window.alert("标定被拒绝：" + (result.error || "未知原因"));
+  }
+  refresh();
+});
+
 $("wind-alarm-btn").addEventListener("click", async () => {
   await post("/api/wind/alarm", { level: 14 });
   refresh();

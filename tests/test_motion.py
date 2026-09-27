@@ -6,6 +6,7 @@ import unittest
 
 from cranefleet.audit import Audit
 from cranefleet.errors import (
+    CalibrationError,
     FeedbackNotConfirmed,
     HoistBusy,
     HookNotLowered,
@@ -18,12 +19,15 @@ from cranefleet.geometry import Point
 from cranefleet.hoist import (
     Drum,
     Hoist,
+    calibrate_drum,
     engage_brake,
     limit_stop as hoist_limit_stop,
     lower,
+    persist_drum,
     persist_hoist,
     raise_hook,
     release_brake,
+    restore_drum,
     resume_release,
     stop as hoist_stop,
 )
@@ -230,6 +234,78 @@ class HoistTests(unittest.TestCase):
         self.assertGreater(drum.wound_total(), 0.0)
         self.assertGreaterEqual(drum.layer_count(), 1)
         self.assertGreater(drum.height_from_cable(10.0), 0.0)
+
+    def test_layer_advances_only_after_a_full_layer(self) -> None:
+        drum = Drum(0.8)
+        capacity = drum.layer_capacity(1)
+        self.assertGreater(drum.layer_capacity(2), capacity)
+        drum.pay_out(capacity * 0.5)
+        self.assertEqual(drum.layer_count(), 1)
+        drum.pay_out(capacity)
+        self.assertEqual(drum.layer_count(), 2)
+        self.assertAlmostEqual(drum.wound_total(), capacity * 1.5)
+
+    def test_height_tracks_cable_across_layers(self) -> None:
+        drum = Drum(0.8)
+        # Spool well into the third layer, then every height reading must
+        # still agree with the paid-out cable instead of drifting with the
+        # layer count.
+        drum.pay_out(drum.layer_capacity(1) + drum.layer_capacity(2) + 25.0)
+        self.assertGreaterEqual(drum.layer_count(), 3)
+        wound = drum.wound_total()
+        self.assertAlmostEqual(drum.height_from_cable(wound), wound)
+        self.assertAlmostEqual(
+            drum.height_from_revolutions(drum.revolutions_now()),
+            drum.height_from_cable(wound),
+        )
+
+    def test_height_respects_reeving(self) -> None:
+        drum = Drum(0.8, falls=2)
+        drum.pay_out(30.0)
+        self.assertAlmostEqual(drum.height_from_cable(drum.wound_total()), 15.0)
+
+    def test_calibrate_drum_applies_measured_height(self) -> None:
+        drum = Drum(0.8)
+        drum.pay_out(40.0)
+        record = calibrate_drum(drum, 41.2)
+        self.assertAlmostEqual(record.correction, 1.03)
+        self.assertAlmostEqual(drum.height_from_cable(drum.wound_total()), 41.2)
+        self.assertEqual(drum.calibration_count(), 1)
+        self.assertEqual(drum.last_calibration_now(), record)
+
+    def test_calibrate_drum_rejects_bad_measurements(self) -> None:
+        drum = Drum(0.8)
+        with self.assertRaises(CalibrationError):
+            calibrate_drum(drum, 10.0)
+        drum.pay_out(40.0)
+        with self.assertRaises(CalibrationError):
+            calibrate_drum(drum, 0.0)
+        with self.assertRaises(CalibrationError):
+            calibrate_drum(drum, 100.0)
+        self.assertEqual(drum.correction_now(), 1.0)
+        self.assertEqual(drum.calibration_count(), 0)
+
+    def test_drum_snapshot_round_trip(self) -> None:
+        store = MemoryStore()
+        drum = Drum(0.8)
+        drum.pay_out(drum.layer_capacity(1) + 12.0)
+        calibrate_drum(drum, drum.wound_total() * 1.02)
+        persist_drum(drum, "crane-1", store)
+        restored = Drum(0.8)
+        restore_drum(restored, "crane-1", store)
+        self.assertAlmostEqual(restored.wound_total(), drum.wound_total())
+        self.assertEqual(restored.layer_count(), drum.layer_count())
+        self.assertAlmostEqual(restored.revolutions_now(), drum.revolutions_now())
+        self.assertAlmostEqual(restored.correction_now(), drum.correction_now())
+        self.assertEqual(restored.calibration_count(), 1)
+        self.assertAlmostEqual(
+            restored.height_from_cable(restored.wound_total()),
+            drum.height_from_cable(drum.wound_total()),
+        )
+        fresh = Drum(0.8)
+        restore_drum(fresh, "crane-9", store)
+        self.assertEqual(fresh.wound_total(), 0.0)
+        self.assertEqual(fresh.correction_now(), 1.0)
 
 
 if __name__ == "__main__":

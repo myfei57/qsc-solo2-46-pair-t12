@@ -55,6 +55,14 @@
         <button id="release-btn">松闸</button>
         <button id="trolley-btn">变幅</button>
         <button id="hoist-stop-btn">停止起升</button>
+        <button id="hoist-wind-btn">收绳 1 米</button>
+      </div>
+      <div class="form-row">
+        <label>实测高度（米）<input id="cal-height" type="number" step="0.1" value="30"></label>
+        <label>当前放绳（可选，米）<input id="cal-cable" type="number" step="0.1" placeholder="自动读取"></label>
+        <label>绳系倍率（可选）<input id="cal-parts" type="number" step="1" placeholder="未说明取 1"></label>
+        <label>层间补偿（可选）<input id="cal-comp" type="number" step="0.01" placeholder="保守值 0.90"></label>
+        <button id="calibrate-btn">重新标定并记录</button>
       </div>
     </section>
 

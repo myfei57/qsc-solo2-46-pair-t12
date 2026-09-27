@@ -54,11 +54,15 @@ async function refresh() {
   const limit = data.limit || {};
   const cluster = data.cluster || {};
   const pair = cluster.nearest_pair || {};
+  const hookHeight = hoist.hook_height === null || hoist.hook_height === undefined
+    ? "未标定"
+    : hoist.hook_height.toFixed(2) + " 米";
   renderCards([
     ["塔吊数量", Object.keys(cluster.positions || {}).length],
     ["分区占用", (zone.occupants || []).length, zone.conflict ? "danger" : ""],
     ["冲突闩锁", zone.latch ? "锁定" : "释放", zone.latch ? "danger" : ""],
     ["回转状态", slew.moving ? "运转" : "停止", wind.active ? "warn" : ""],
+    ["吊钩高度", hookHeight, hoist.height_calibrated ? "" : "warn"],
     ["落钩状态", hoist.hook_lowered ? "已落钩" : "未落钩", hoist.hook_lowered ? "" : "warn"],
     ["制动状态", hoist.brake_engaged ? "抱闸" : "松闸"],
     ["风速", (wind.level || 0).toFixed(1) + " m/s", wind.active ? "danger" : ""],
@@ -139,6 +143,27 @@ $("trolley-btn").addEventListener("click", async () => {
 
 $("hoist-stop-btn").addEventListener("click", async () => {
   await post("/api/hoist/stop");
+  refresh();
+});
+
+$("hoist-wind-btn").addEventListener("click", async () => {
+  await post("/api/hoist/wind", { length: 1 });
+  refresh();
+});
+
+$("calibrate-btn").addEventListener("click", async () => {
+  const payload = {
+    measured_height: Number($("cal-height").value),
+    operator: "field",
+    note: "现场重新量测",
+  };
+  const cable = $("cal-cable").value;
+  const parts = $("cal-parts").value;
+  const compensation = $("cal-comp").value;
+  if (cable !== "") payload.cable_out = Number(cable);
+  if (parts !== "") payload.rope_parts = Number(parts);
+  if (compensation !== "") payload.layer_compensation = Number(compensation);
+  await post("/api/hoist/calibrate", payload);
   refresh();
 });
 

@@ -27,6 +27,7 @@ from .config import ConfigError, SiteConfig
 from .crane import Crane
 from .errors import (
     CraneFleetError,
+    DrumCalibrationError,
     FeedbackNotConfirmed,
     HoistBusy,
     HookNotLowered,
@@ -137,6 +138,9 @@ class Console:
             ("POST", "/api/trolley/resume"): self.handle_trolley_resume,
             ("GET", "/api/hoist/state"): self.handle_hoist_state,
             ("POST", "/api/hoist/payout"): self.handle_hoist_payout,
+            ("POST", "/api/hoist/wind"): self.handle_hoist_wind,
+            ("POST", "/api/hoist/turns"): self.handle_hoist_turns,
+            ("POST", "/api/hoist/calibrate"): self.handle_hoist_calibrate,
             ("POST", "/api/hoist/feedback"): self.handle_hoist_feedback,
             ("POST", "/api/hoist/release"): self.handle_hoist_release,
             ("POST", "/api/hoist/stop"): self.handle_hoist_stop,
@@ -313,7 +317,6 @@ class Console:
             crane_module.apply_remote(crane, command)
         else:
             crane_module.apply_cab(crane, command)
-        self._book_keeping(command)
         try:
             crane_module.execute(crane, self.slew, self.trolley, self.hoist, self.audit)
         except SlewIdle:
@@ -322,11 +325,13 @@ class Console:
             return 409, fail("hook not lowered")
         except HoistBusy:
             return 409, fail("hoist busy")
-        if command.action == crane_module.ACTION_LOWER:
+        self._book_keeping(command)
+        if command.action in (crane_module.ACTION_LOWER, crane_module.ACTION_RAISE):
             try:
                 hoist_module.persist_hoist(self.hoist, self.store)
+                hoist_module.persist_drum(self.drum, self.store)
             except StoreError as exc:
-                LOGGER.debug("best-effort hoist persist skipped after lower: %s", exc)
+                LOGGER.debug("best-effort hoist persist skipped after hoist command: %s", exc)
         return 200, ok(crane.last_command().to_dict())
 
     def _book_keeping(self, command: crane_module.Command) -> None:
@@ -335,12 +340,20 @@ class Console:
             self.load.update(0.3, 0.1)
         elif command.action == crane_module.ACTION_LOWER:
             self.drum.pay_out(1.5)
-            self.load.set_vertical(8.0)
+            self._sync_load_height()
+        elif command.action == crane_module.ACTION_RAISE:
+            self.drum.wind_in(1.5)
+            self._sync_load_height()
         elif command.action == crane_module.ACTION_TROLLEY:
             self.speedometer.sample(self.trolley.position_now(), 0.5)
         elif command.action == crane_module.ACTION_STOP:
             self.ramp.set_target(0.0)
             self.load.update(-0.2, 0.1)
+
+    def _sync_load_height(self) -> None:
+        height = self.drum.hook_height()
+        if height is not None:
+            self.load.set_vertical(height)
 
     def handle_crane_state(self, request: Request) -> tuple[int, dict[str, Any]]:
         return 200, ok(views.crane_view(self))
@@ -380,7 +393,89 @@ class Console:
     def handle_hoist_payout(self, request: Request) -> tuple[int, dict[str, Any]]:
         if not request.body_valid:
             return 400, fail("bad request")
-        self.drum.pay_out(_number(request.body.get("length")))
+        length = _number(request.body.get("length"))
+        turns = request.body.get("turns")
+        try:
+            if length < 0.0:
+                raise DrumCalibrationError("length must be non-negative")
+            if turns is not None:
+                self.drum.report_turns(_number(turns))
+            else:
+                self.drum.pay_out(length)
+            self._sync_load_height()
+            hoist_module.persist_drum(self.drum, self.store)
+        except DrumCalibrationError as exc:
+            return 400, fail(str(exc))
+        except StoreError as exc:
+            return 500, fail(str(exc))
+        return 200, ok(views.hoist_view(self))
+
+    def handle_hoist_wind(self, request: Request) -> tuple[int, dict[str, Any]]:
+        if not request.body_valid:
+            return 400, fail("bad request")
+        length = _number(request.body.get("length"))
+        try:
+            self.drum.wind_in(length)
+            self._sync_load_height()
+            hoist_module.persist_drum(self.drum, self.store)
+        except DrumCalibrationError as exc:
+            return 400, fail(str(exc))
+        except StoreError as exc:
+            return 500, fail(str(exc))
+        return 200, ok(views.hoist_view(self))
+
+    def handle_hoist_turns(self, request: Request) -> tuple[int, dict[str, Any]]:
+        if not request.body_valid:
+            return 400, fail("bad request")
+        try:
+            self.drum.report_turns(_number(request.body.get("turns")))
+            self._sync_load_height()
+            hoist_module.persist_drum(self.drum, self.store)
+        except DrumCalibrationError as exc:
+            return 400, fail(str(exc))
+        except StoreError as exc:
+            return 500, fail(str(exc))
+        return 200, ok(views.hoist_view(self))
+
+    def handle_hoist_calibrate(self, request: Request) -> tuple[int, dict[str, Any]]:
+        if not request.body_valid:
+            return 400, fail("bad request")
+        if request.body.get("measured_height") is None:
+            return 400, fail("measured_height required")
+        try:
+            calibration = self.drum.calibrate(
+                measured_height=_number(request.body.get("measured_height")),
+                cable_out=(
+                    None
+                    if request.body.get("cable_out") is None
+                    else _number(request.body.get("cable_out"))
+                ),
+                rope_parts=(
+                    None
+                    if request.body.get("rope_parts") is None
+                    else _number(request.body.get("rope_parts"))
+                ),
+                layer_compensation=(
+                    None
+                    if request.body.get("layer_compensation") is None
+                    else _number(request.body.get("layer_compensation"))
+                ),
+                operator=str(request.body.get("operator") or ""),
+                note=str(request.body.get("note") or ""),
+            )
+            hoist_module.persist_drum(self.drum, self.store)
+        except DrumCalibrationError as exc:
+            return 400, fail(str(exc))
+        except StoreError as exc:
+            return 500, fail(str(exc))
+        self._sync_load_height()
+        detail = (
+            f"height={calibration.reference_height:.3f}m "
+            f"cable={calibration.cable_out:.3f}m "
+            f"parts={calibration.rope_parts} "
+            f"comp={calibration.layer_compensation:.2f}"
+        )
+        self.audit.record(self.hoist.id, "hoist-calibration", detail)
         return 200, ok(views.hoist_view(self))
 
     def handle_hoist_feedback(self, request: Request) -> tuple[int, dict[str, Any]]:

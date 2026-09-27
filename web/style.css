@@ -20,3 +20,7 @@ pre { background: #fff; border-radius: 10px; padding: 14px; white-space: pre-wra
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .actions button { background: #2f6fb0; color: #fff; border: 0; border-radius: 6px; padding: 9px 15px; cursor: pointer; font-size: 14px; }
 .actions button:active { background: #245486; }
+.form-row { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-top: 12px; }
+.form-row label { background: #fff; border-radius: 8px; padding: 9px 11px; font-size: 13px; color: #64748b; }
+.form-row input { display: block; margin-top: 5px; padding: 7px 8px; border: 1px solid #cbd5e1; border-radius: 6px; min-width: 150px; }
+.form-row button { background: #2f6fb0; color: #fff; border: 0; border-radius: 6px; padding: 9px 15px; cursor: pointer; font-size: 14px; }

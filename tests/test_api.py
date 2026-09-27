@@ -94,6 +94,28 @@ class DispatchFlowTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(payload["data"]["trolley"]["moving"])
         dispatch(self.console, "POST", "/api/hoist/payout", {"length": 3})
+        status, payload = dispatch(
+            self.console,
+            "POST",
+            "/api/hoist/calibrate",
+            {"measured_height": 25, "operator": "rigger", "note": "manual"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["data"]["height_calibrated"])
+        self.assertEqual(payload["data"]["layer_compensation"], 0.9)
+        self.assertEqual(payload["data"]["latest_calibration"]["operator"], "rigger")
+        self.assertIsNotNone(self.console.audit.latest("hoist-calibration"))
+        status, payload = dispatch(
+            self.console, "POST", "/api/hoist/calibrate", {"measured_height": 25, "layer_compensation": 1.2}
+        )
+        self.assertEqual(status, 400)
+        status, payload = dispatch(self.console, "POST", "/api/hoist/payout", {"length": -1})
+        self.assertEqual(status, 400)
+        status, payload = dispatch(self.console, "POST", "/api/hoist/calibrate", {})
+        self.assertEqual(status, 400)
+        status, payload = dispatch(self.console, "POST", "/api/hoist/turns", {"turns": 61})
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["data"]["drum_layers"], 2)
         status, payload = dispatch(self.console, "POST", "/api/hoist/stop")
         self.assertFalse(payload["data"]["moving"])
 
@@ -246,6 +268,8 @@ class BootSnapshotTests(unittest.TestCase):
                 "/api/config",
                 {"site_name": "华东六号", "safe_separation": 20},
             )
+            dispatch(first.console, "POST", "/api/hoist/payout", {"length": 2})
+            dispatch(first.console, "POST", "/api/hoist/calibrate", {"measured_height": 30})
             first.shutdown()
             self.assertTrue((Path(directory) / "snapshot.json").is_file())
 
@@ -257,6 +281,10 @@ class BootSnapshotTests(unittest.TestCase):
             baseline = second.console.cluster.baseline["crane-2"]
             self.assertAlmostEqual(baseline.x, 40.0)
             self.assertAlmostEqual(baseline.y, 10.0)
+            self.assertAlmostEqual(second.console.drum.wound_total(), 2.0)
+            self.assertTrue(second.console.drum.latest_calibration() is not None)
+            self.assertEqual(second.console.drum.latest_calibration().note, "")
+            self.assertAlmostEqual(second.console.drum.hook_height(), 30.0)
             self.assertTrue(any(entry.action == "boot" for entry in second.console.audit.snapshot()))
             self.assertTrue(any(entry.action == "shutdown" for entry in second.console.audit.snapshot()))
             second.shutdown()

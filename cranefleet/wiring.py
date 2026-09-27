@@ -16,7 +16,7 @@ from .console import Console
 from .crane import Crane
 from .errors import StoreNotFound
 from .geometry import Point
-from .hoist import Hoist
+from .hoist import Hoist, persist_drum, restore_drum
 from .limit import Limit
 from .slew import Slew, SpeedFeedback
 from .store import FileStore, MemoryStore, Store, decode_snapshot, encode_snapshot
@@ -42,6 +42,7 @@ class App:
 
         self.audit.record("system", "shutdown", "control service stopping")
         flush_audit(self.store, self.audit)
+        persist_drum(self.console.drum, self.store)
         site_config.save_config(self.store, self.console.config)
         if self.snapshot_path is not None:
             self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +100,10 @@ def build_app(data_dir: str = "data", web_root: str = "web") -> App:
         config=config,
         web_root=web_root,
     )
+    restore_drum(console.drum, store)
+    restored_height = console.drum.hook_height()
+    if restored_height is not None:
+        console.load.set_vertical(restored_height)
     audit.record("system", "boot", "control service started")
     return App(console=console, store=store, audit=audit, snapshot_path=snapshot_path)
 

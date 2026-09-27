@@ -6,6 +6,7 @@ import unittest
 
 from cranefleet.audit import Audit
 from cranefleet.errors import (
+    DrumCalibrationError,
     FeedbackNotConfirmed,
     HoistBusy,
     HookNotLowered,
@@ -16,14 +17,18 @@ from cranefleet.errors import (
 )
 from cranefleet.geometry import Point
 from cranefleet.hoist import (
+    DEFAULT_DRUM_WIDTH,
+    DEFAULT_LAYER_COMPENSATION,
     Drum,
     Hoist,
     engage_brake,
     limit_stop as hoist_limit_stop,
     lower,
+    persist_drum,
     persist_hoist,
     raise_hook,
     release_brake,
+    restore_drum,
     resume_release,
     stop as hoist_stop,
 )
@@ -228,8 +233,64 @@ class HoistTests(unittest.TestCase):
         drum = Drum(0.8)
         drum.pay_out(1.5)
         self.assertGreater(drum.wound_total(), 0.0)
-        self.assertGreaterEqual(drum.layer_count(), 1)
+        self.assertEqual(drum.layer_count(), 1)
         self.assertGreater(drum.height_from_cable(10.0), 0.0)
+
+    def test_drum_integrates_outer_layer_circumference(self) -> None:
+        drum = Drum(0.8, width=DEFAULT_DRUM_WIDTH, cable_diameter=0.02)
+        turns_per_layer = DEFAULT_DRUM_WIDTH / 0.02
+        first_layer = drum.layer_length(0)
+        drum.pay_out(first_layer)
+        self.assertEqual(drum.layer_count(), 2)
+        self.assertAlmostEqual(drum.turns_now(), turns_per_layer)
+        drum.report_turns(turns_per_layer + 1.0)
+        self.assertEqual(drum.layer_count(), 2)
+        self.assertGreater(drum.cable_length(), first_layer)
+        self.assertAlmostEqual(drum.cable_length(), first_layer + drum.turn_length(1), places=5)
+        self.assertAlmostEqual(drum.height_from_turns(turns_per_layer + 1.0), drum.cable_length())
+        drum.wind_in(drum.turn_length(1))
+        self.assertAlmostEqual(drum.turns_now(), turns_per_layer)
+        self.assertEqual(drum.layer_count(), 2)
+
+    def test_height_tracks_paid_cable_and_reeving(self) -> None:
+        drum = Drum(0.8, rope_parts=2)
+        drum.pay_out(4.0)
+        self.assertAlmostEqual(drum.height_from_cable(drum.wound_total()), 2.0)
+
+    def test_recalibration_records_height_and_uses_conservative_default(self) -> None:
+        drum = Drum(0.8)
+        drum.pay_out(5.0)
+        record = drum.calibrate(30.0, operator="rigger", note="manual check")
+        self.assertEqual(record.reference_height, 30.0)
+        self.assertEqual(record.cable_out, 5.0)
+        self.assertEqual(record.layer_compensation, DEFAULT_LAYER_COMPENSATION)
+        self.assertLess(DEFAULT_LAYER_COMPENSATION, 1.0)
+        drum.pay_out(2.0)
+        self.assertAlmostEqual(drum.hook_height(), 28.0)
+        records = drum.calibration_records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].operator, "rigger")
+
+    def test_drum_rejects_unsafe_compensation_and_negative_length(self) -> None:
+        with self.assertRaises(DrumCalibrationError):
+            Drum(0.8, layer_compensation=0.5)
+        drum = Drum(0.8)
+        with self.assertRaises(DrumCalibrationError):
+            drum.pay_out(-1.0)
+        with self.assertRaises(DrumCalibrationError):
+            drum.calibrate(30.0, layer_compensation=1.2)
+
+    def test_drum_calibration_round_trip(self) -> None:
+        store = MemoryStore()
+        drum = Drum(0.8)
+        drum.pay_out(3.0)
+        drum.calibrate(28.0, rope_parts=2)
+        persist_drum(drum, store)
+        restored = Drum(0.8)
+        restore_drum(restored, store)
+        self.assertAlmostEqual(restored.wound_total(), 3.0)
+        self.assertEqual(restored.rope_parts, 2)
+        self.assertAlmostEqual(restored.hook_height(), 28.0)
 
 
 if __name__ == "__main__":
